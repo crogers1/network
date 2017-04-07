@@ -765,7 +765,7 @@ moveToNetwork vif network = do
                                 else moveVifToDomain (networkBackendDomid y) newDomid gDomid gDevid gMac
 
         addVif sDomid gDomid gDevid mac = do
-	     (_, _, _, pid) <- createProcess (proc "/usr/sbin/xl" ["network-attach", gDomid, "type=vif", printf "mac=%s" mac, printf "backend=%s" (show sDomid)]){ close_fds = True }
+	     (_, _, _, pid) <- createProcess (proc "/usr/sbin/xl" ["network-attach", gDomid, "type=vif", printf "mac=%s" mac, printf "backend=%s" (show sDomid), printf "devid=%s" (show gDevid)]){ close_fds = True }
 	     waitForProcess pid
         delVif sDomid gDomid gDevid = do
 	     (_, _, _, pid) <- createProcess (proc "/usr/sbin/xl" ["network-detach", gDomid, gDevid]){ close_fds = True }
