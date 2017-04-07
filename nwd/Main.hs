@@ -44,7 +44,7 @@ import Data.Char
 import Data.Word
 import Data.String
 import Data.Maybe
-import Data.List (nub)
+import Data.List (nub, isInfixOf)
 import Data.IntSet (IntSet, (\\))
 import qualified Data.IntSet as IntSet
 import qualified Data.Map as M
@@ -724,9 +724,13 @@ isNetworkingActive = do
     debug $ printf "Networking active: %s" (show status)
     return status
 
+vifType :: String -> Bool
+vifType network = isInfixOf "wifi" network
+
 moveToNetwork :: String -> String -> App ()
 moveToNetwork vif network = do
     appState <- getAppState
+    info $ printf "moveToNetwork: vif: %s network: %s" vif network
     case (domAndDevIdFromVif vif) of
          [gDomid, gDevid] -> void $ do
             if ((read gDomid :: Int32) == 0) 
@@ -737,17 +741,18 @@ moveToNetwork vif network = do
                     when dom0Networking $ void $ do 
                         gMac <- liftIO $ fromJust <$> xsVifMac gDomid gDevid
                         nwState <- liftIO $ nwLookup network appState
-                        moveVifToNetwork appState vif gDomid gDevid gMac nwState
+                        moveVifToNetwork appState vif gDomid gDevid gMac nwState (vifType network)
                else void $ do
                     gVmObj <- liftRpc $ getVmFromDomid (read gDomid :: Int32)
                     debug $ printf "Moving %s vif to %s" (show gVmObj) network
                     unless (null gVmObj) $ do 
                         gMac <- liftRpc $ getVmNicMac gVmObj gDevid
                         nwState <- liftIO $ nwLookup network appState
-                        moveVifToNetwork appState vif gDomid gDevid gMac nwState
+                        debug $ printf "moveVifToNetwork: domid: %s, devid: %s, vif: %s" (show gDomid) (show gDevid) vif
+                        moveVifToNetwork appState vif gDomid gDevid gMac nwState (vifType network)
          otherwise -> return ()
     where
-        moveVifToNetwork appState vif gDomid gDevid gMac nwState = do
+        moveVifToNetwork appState vif gDomid gDevid gMac nwState typ = do
            case nwState of
                 Nothing -> debug $ printf "Network not initialized yet-  %s" network
                 Just nw -> void $ do 
@@ -758,14 +763,14 @@ moveToNetwork vif network = do
                     case curBackendInfo of
                          [] -> void $ do
                                   mac <- liftRpc $ vifMac newDomid gDomid gMac nw
-                                  void $ liftIO $ addVif newDomid gDomid gDevid gMac
+                                  void $ liftIO $ addVif newDomid gDomid gDevid gMac typ
                          y:_ -> void $ do
                              if (networkBackendDomid y == newDomid)
                                 then moveVif newDomid gDomid gDevid vif nw
-                                else moveVifToDomain (networkBackendDomid y) newDomid gDomid gDevid gMac
+                                else moveVifToDomain (networkBackendDomid y) newDomid gDomid gDevid gMac typ
 
-        addVif sDomid gDomid gDevid mac = do
-	     (_, _, _, pid) <- createProcess (proc "/usr/sbin/xl" ["network-attach", gDomid, "type=vif", printf "mac=%s" mac, printf "backend=%s" (show sDomid), printf "devid=%s" (show gDevid)]){ close_fds = True }
+        addVif sDomid gDomid gDevid mac typ = do
+	     (_, _, _, pid) <- createProcess (proc "/usr/sbin/xl" ["network-attach", gDomid, "type=vif" , printf "mac=%s" mac, printf "backend=%s" (show sDomid), printf "devid=%s" (show gDevid), if typ then "wireless=1" else "wireless=0" ]){ close_fds = True }
 	     waitForProcess pid
         delVif sDomid gDomid gDevid = do
 	     (_, _, _, pid) <- createProcess (proc "/usr/sbin/xl" ["network-detach", gDomid, gDevid]){ close_fds = True }
@@ -776,11 +781,11 @@ moveToNetwork vif network = do
              then withNetworkSlave sDomid (NC.comCitrixXenclientNetworkConfigGetMacAddress slaveService (nwsObj nw))  >>= return
              else return gMac
 
-        moveVifToDomain :: DomainId -> DomainId -> String -> String -> String -> App ()
-        moveVifToDomain oDomid nDomid gDomid gDevid gMac= void $ liftIO $ do
+        moveVifToDomain :: DomainId -> DomainId -> String -> String -> String -> Bool -> App ()
+        moveVifToDomain oDomid nDomid gDomid gDevid gMac typ= void $ liftIO $ do
             disconnectVif oDomid gDomid gDevid
             delVif oDomid gDomid gDevid
-            addVif nDomid gDomid gDevid gMac
+            addVif nDomid gDomid gDevid gMac typ
 
         moveVif :: DomainId -> String -> String -> String -> NwsObjInfo -> App ()
         moveVif sDomid gDomid gDevid vif nw = do
